@@ -170,7 +170,7 @@ def create_rpmbuild_content(repo, target, config):
                 fname = '{}-env-{}-label-{}.spec'.format(rpm_prefix, branch.name, label)
                 with open(os.path.join(target, 'SPECS', fname), 'w') as fh:
                     fh.write(generate.render_env(branch.name, label,
-                                                 repo, config, tag, commit_num))
+                                                 config, tag, commit_num))
 
 
 def create_rpm_installer(target, config, python_spec='python'):

@@ -12,9 +12,13 @@ env_spec_tmpl = env.get_template('env.spec.template')
 taggedenv_spec_tmpl = env.get_template('taggedenv.spec.template')
 installer_spec_tmpl = env.get_template('installer.spec.template')
 
-import tarfile
 import json
+import re
+import tarfile
 import yaml
+
+TAG_PATTERN = '^env-\w+-(\d{4}_\d{2}_\d{2}(-\d+)?)$'
+tag_pattern = re.compile(TAG_PATTERN)
 
 
 def render_dist_spec(dist, config):
@@ -49,17 +53,28 @@ def render_dist_spec(dist, config):
                                 rpm_prefix=rpm_prefix,
                                 install_prefix=install_prefix)
 
-def render_env(branch_name, label, repo, config, tag, commit_num):
-    env_info = {'url': 'http://link/to/gh',
-                'name': branch_name,
-		'label' : label,
-                'summary': 'A SciTools environment.',
-                'version': commit_num,}
+
+def render_env(branch_name, label, config, tag, commit_num):
     install_prefix = config['install']['prefix']
     rpm_prefix = config['rpm']['prefix']
+    env_info = {'url': 'http://link/to/gh',
+                'name': branch_name,
+                'label': label,
+                'summary': 'A {} environment.'.format(rpm_prefix),
+                'version': commit_num,}
+    # When multiple tags are produced in a day, they have an associated count
+    # addded to the end e.g. env-default-2016_12_05-2, which needs to be parsed
+    # correctly.
+    match = tag_pattern.match(tag)
+    if match is None:
+        msg = "Cannot create an environment for the tag {}. The name of the " \
+              "tag must follow the format " \
+              "'env-<environment name>-YYYY-MM-DD(-<count> (optional))'"
+        raise ValueError(msg.format(tag))
+    tag_name = match.group(1)
     return env_spec_tmpl.render(install_prefix=install_prefix,
                                 rpm_prefix=rpm_prefix, env=env_info,
-                                labelled_tag=tag.split('-')[-1])
+                                labelled_tag=tag_name)
 
 
 def render_taggedenv(env_name, tag, pkgs, config, env_spec):
