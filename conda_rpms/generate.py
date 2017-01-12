@@ -6,9 +6,10 @@ template_dir = os.path.join(os.path.dirname(__file__), 'templates')
 loader = jinja2.FileSystemLoader(template_dir)
 
 env = jinja2.Environment(loader=loader)
+env_trim_blocks = jinja2.Environment(loader=loader, trim_blocks=True)
 
 pkg_spec_tmpl = env.get_template('pkg.spec.template')
-env_spec_tmpl = env.get_template('env.spec.template')
+env_spec_tmpl = env_trim_blocks.get_template('env.spec.template')
 taggedenv_spec_tmpl = env.get_template('taggedenv.spec.template')
 installer_spec_tmpl = env.get_template('installer.spec.template')
 
@@ -56,6 +57,7 @@ def render_dist_spec(dist, config):
 
 def render_env(branch_name, label, config, tag, commit_num):
     install_prefix = config['install']['prefix']
+    module_prefix = config['module']['prefix']
     rpm_prefix = config['rpm']['prefix']
     env_info = {'url': 'http://link/to/gh',
                 'name': branch_name,
@@ -74,6 +76,7 @@ def render_env(branch_name, label, config, tag, commit_num):
     tag_name = match.group(1)
     return env_spec_tmpl.render(install_prefix=install_prefix,
                                 rpm_prefix=rpm_prefix, env=env_info,
+                                module_prefix=module_prefix,
                                 labelled_tag=tag_name)
 
 
