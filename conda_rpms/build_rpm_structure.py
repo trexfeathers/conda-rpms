@@ -147,7 +147,7 @@ def create_rpmbuild_for_tag(repo, tag_name, target, config):
         fh.write(generate.render_taggedenv(env_name, tag, pkgs, config, env_spec))
 
 
-def create_rpmbuild_content(repo, target, config):
+def create_rpmbuild_content(repo, target, config, state):
     rpm_prefix = config['rpm']['prefix']
     for branch in repo.branches:
         # We only want environment branches, not manifest branches.
@@ -158,14 +158,34 @@ def create_rpmbuild_content(repo, target, config):
             if manifest_branch_name not in repo.branches:
                 continue
             branch.checkout()
-            labelled_tags = tags_by_label(os.path.join(repo.working_dir,
-                                                       'labels'))
+            fname = os.path.join(repo.working_dir, 'labels')
+            branch_labelled_tags = tags_by_label(fname)
 
-            # Get number of commits to determine the version of the env rpm.
-            commit_num = len(list(Commit.iter_items(repo, branch.commit))) 
+            # Get the number of commits in this branch, and use this as the
+            # version number in the environment label RPM spec.
+            commit_num = branch.commit.count()
+
+            # Determine the environment tags that are new or have been changed
+            # for each branch label, and thus require to have its associated
+            # RPM build.
+            if branch.name in state:
+                # This branch has been built before and has a history ...
+                labelled_tags = {}
+                for label, tag in branch_labelled_tags.items():
+                    if label in state[branch.name] and \
+                            tag in state[branch.name][label]:
+                        # Skip - the associated RPM already exists.
+                        continue
+                    # This label or this labels tag is new, so register it
+                    # for RPM building.
+                    labelled_tags[label] = tag
+            else:
+                # This is a new environment branch, so register all of its
+                # labels for RPM building.
+                labelled_tags = branch_labelled_tags
 
             # Keep track of the labels which have tags - its those we want.
-            for label, tag in labelled_tags.items():
+            for label, tag in sorted(labelled_tags.items()):
                 create_rpmbuild_for_tag(repo, tag, target, config)
                 fname = '{}-env-{}-label-{}.spec'.format(rpm_prefix, branch.name, label)
                 with open(os.path.join(target, 'SPECS', fname), 'w') as fh:
@@ -207,6 +227,8 @@ def configure_parser(parser):
     parser.add_argument('target', help='Location to put the RPMBUILD content.')
     parser.add_argument('--config', '-c', type=str, default='config.yaml',
                         help='YAML configuration filename.')
+    parser.add_argument('--state', '-s',
+                        help='YAML label RPM state filename.')
     parser.set_defaults(function=handle_args)
     return parser
 
@@ -220,10 +242,15 @@ def handle_args(args):
         logger.setLevel(logging.WARNING)
 
     config = Config(args.config)
+    state = {}
+    if args.state is not None:
+        fname = os.path.abspath(os.path.expanduser(args.state))
+        with open(fname, 'r') as fi:
+            state = yaml.safe_load(fi)
     with tempdir() as repo_directory:
         repo = Repo.clone_from(args.repo_uri, repo_directory)
         create_tracking_branches(repo)
-        create_rpmbuild_content(repo, args.target, config)
+        create_rpmbuild_content(repo, args.target, config, state)
         create_rpm_installer(args.target, config)
 
 
