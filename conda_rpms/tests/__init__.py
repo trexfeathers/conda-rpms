@@ -1,4 +1,5 @@
 import contextlib
+import os
 import shutil
 import tempfile
 import unittest
@@ -64,4 +65,22 @@ class CommonTest(unittest.TestCase):
         try:
             yield dname
         finally:
-            shutil.rmtree(dname) 
+            shutil.rmtree(dname)
+
+    def add_label(self, repo, branch, fname, tag, comment=None):
+        """
+        Create a label file in the specified repository branch
+        "labels" directory, which contains the provided tag.
+
+        """
+        branch.checkout()
+        dname = os.path.join(repo.working_dir, 'labels')
+        if not os.path.isdir(dname):
+            os.makedirs(dname)
+        fpath = os.path.join(dname, fname)
+        with open(fpath, 'w') as fo:
+            fo.write(tag)
+        self.repo.index.add([fpath])
+        if comment is None:
+            comment = 'Add label {}'.format(fname)
+        self.repo.index.commit(comment)

@@ -1,0 +1,11 @@
+branch1:
+    current:
+        - env-branch1-1970_01_01
+        - env-branch1-1970_02_02
+        - env-branch1-1970_03_03
+    next:
+        - env-branch1-1970_04_04
+        - env-branch1-1970_04_05
+branch2:
+    current:
+        - env-branch2-1980_01_01
