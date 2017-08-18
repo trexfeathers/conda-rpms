@@ -20,6 +20,8 @@ import yaml
 
 TAG_PATTERN = '^env-\w+-(\d{4}_\d{2}_\d{2}(-\d+)?)$'
 tag_pattern = re.compile(TAG_PATTERN)
+# Parse out the environment name from the default (.verison) modulefile.
+# e.g "set modulesversion 'default-current'"
 ENV_PATTERN = '^\s*set\s+modulesversion\s+[\'\"](.*)[\'\"]\s*$'
 env_pattern = re.compile(ENV_PATTERN, re.IGNORECASE)
 
@@ -70,14 +72,19 @@ def render_env(branch_name, label, config, tag, commit_num):
                 'prefix': config['install']['prefix']}
     module = dict(prefix=None)
 
+    # Configure any registered modulefiles.
     if 'module' in config:
+        # The module prefix must exist.
         module['prefix'] = config['module']['prefix']
+        # The module file must exist (the modulefile for the tagged envs).
         fname = config['module']['file']
         module_loader = jinja2.FileSystemLoader(os.path.dirname(fname))
         module_env = jinja2.Environment(loader=module_loader)
         module_template = module_env.get_template(os.path.basename(fname))
         module['file'] = module_template.render(env=env_info)
         module['default'] = None
+        # Configure the optional default modulefile, which provides the
+        # name of the default environment and label e.g. "default-current".
         if 'default' in config['module']:
             with open(config['module']['default'], 'r') as fi:
                 lines = fi.readlines()
