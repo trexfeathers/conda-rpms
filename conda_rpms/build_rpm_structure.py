@@ -64,6 +64,9 @@ class Config(dict):
             result = Config(self.fname, result, self._key + [key])
         return result
 
+    def __contains__(self, key):
+        return key in self._store
+
     def __iter__(self):
         return iter(self._store)
 
@@ -246,7 +249,7 @@ def handle_args(args):
     if args.state is not None:
         fname = os.path.abspath(os.path.expanduser(args.state))
         with open(fname, 'r') as fi:
-            state = yaml.safe_load(fi)
+            state = yaml.safe_load(fi) or {}
     with tempdir() as repo_directory:
         repo = Repo.clone_from(args.repo_uri, repo_directory)
         create_tracking_branches(repo)

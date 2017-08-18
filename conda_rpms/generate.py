@@ -20,6 +20,10 @@ import yaml
 
 TAG_PATTERN = '^env-\w+-(\d{4}_\d{2}_\d{2}(-\d+)?)$'
 tag_pattern = re.compile(TAG_PATTERN)
+# Parse out the environment name from the default (.verison) modulefile.
+# e.g "set modulesversion 'default-current'"
+ENV_PATTERN = '^\s*set\s+modulesversion\s+[\'\"](.*)[\'\"]\s*$'
+env_pattern = re.compile(ENV_PATTERN, re.IGNORECASE)
 
 
 def render_dist_spec(dist, config):
@@ -56,14 +60,47 @@ def render_dist_spec(dist, config):
 
 
 def render_env(branch_name, label, config, tag, commit_num):
-    install_prefix = config['install']['prefix']
-    module_prefix = config['module']['prefix']
     rpm_prefix = config['rpm']['prefix']
+    summary = 'A {} environment for {}/{}'.format(rpm_prefix,
+                                                  branch_name,
+                                                  label)
     env_info = {'url': 'http://link/to/gh',
                 'name': branch_name,
                 'label': label,
-                'summary': 'A {} environment.'.format(rpm_prefix),
-                'version': commit_num,}
+                'summary': summary,
+                'version': commit_num,
+                'prefix': config['install']['prefix']}
+    module = dict(prefix=None)
+
+    # Configure any registered modulefiles.
+    if 'module' in config:
+        # The module prefix must exist.
+        module['prefix'] = config['module']['prefix']
+        # The module file must exist (the modulefile for the tagged envs).
+        fname = config['module']['file']
+        module_loader = jinja2.FileSystemLoader(os.path.dirname(fname))
+        module_env = jinja2.Environment(loader=module_loader)
+        module_template = module_env.get_template(os.path.basename(fname))
+        module['file'] = module_template.render(env=env_info)
+        module['default'] = None
+        # Configure the optional default modulefile, which provides the
+        # name of the default environment and label e.g. "default-current".
+        if 'default' in config['module']:
+            with open(config['module']['default'], 'r') as fi:
+                lines = fi.readlines()
+            for line in lines:
+                match = env_pattern.match(line)
+                if match:
+                    module_name, module_label = match.group(1).split('-', 2)
+                    module['name'] = module_name
+                    module['label'] = module_label
+                    break
+            else:
+                emsg = ('Cannot find environment name/label within default '
+                        'modulefile "{}".')
+                raise ValueError(emsg.format(config['module']['default']))
+            module['default'] = ''.join(lines)
+
     # When multiple tags are produced in a day, they have an associated count
     # addded to the end e.g. env-default-2016_12_05-2, which needs to be parsed
     # correctly.
@@ -74,10 +111,9 @@ def render_env(branch_name, label, config, tag, commit_num):
               "'env-<environment name>-YYYY-MM-DD(-<count> (optional))'"
         raise ValueError(msg.format(tag))
     tag_name = match.group(1)
-    return env_spec_tmpl.render(install_prefix=install_prefix,
-                                rpm_prefix=rpm_prefix, env=env_info,
-                                module_prefix=module_prefix,
-                                labelled_tag=tag_name)
+    spec = env_spec_tmpl.render(rpm_prefix=rpm_prefix, env=env_info,
+                                module=module, labelled_tag=tag_name)
+    return spec
 
 
 def render_taggedenv(env_name, tag, pkgs, config, env_spec):

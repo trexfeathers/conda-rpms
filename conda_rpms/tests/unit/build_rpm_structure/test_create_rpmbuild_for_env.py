@@ -33,8 +33,8 @@ class Test(tests.CommonTest):
     @patch('conda_rpms.generate.render_dist_spec', return_value='spec')
     @patch('conda_rpms.install.is_fetched', return_value=True)
     @patch('conda.fetch.fetch_index',
-           return_value={'pkg1.tar.bz2': sentinel.pkg1_info,
-                         'pkg2.tar.bz2': sentinel.pkg2_info})
+           return_value={'dummy0': {'fn': 'pkg1.tar.bz2'},
+                         'dummy1': {'fn': 'pkg2.tar.bz2'}})
     @patch('conda_rpms.install.linked', return_value=[])
     def test_pkg_render(self, mlinked, mindex, mfetched, mrender):
         with self.temp_dir() as target:
@@ -63,8 +63,8 @@ class Test(tests.CommonTest):
     @patch('conda.fetch.fetch_pkg')
     @patch('conda_rpms.install.is_fetched', return_value=False)
     @patch('conda.fetch.fetch_index',
-           return_value={'pkg1.tar.bz2': sentinel.pkg1_info,
-                         'pkg2.tar.bz2': sentinel.pkg2_info})
+           return_value={'dummy0': {'fn': 'pkg1.tar.bz2'},
+                         'dummy1': {'fn': 'pkg2.tar.bz2'}})
     @patch('conda_rpms.install.linked', return_value=[])
     def test_pkg_fetch_render(self, mlinked, mindex, mfetched, mpkg, mrender):
         with self.temp_dir() as target:
@@ -78,8 +78,8 @@ class Test(tests.CommonTest):
             expected = [call(srcs_dir, 'pkg1'),
                         call(srcs_dir, 'pkg2')]
             self.assertEqual(mfetched.call_args_list, expected)
-            expected = [call(sentinel.pkg1_info, srcs_dir),
-                        call(sentinel.pkg2_info, srcs_dir)]
+            expected = [call({'fn': 'pkg1.tar.bz2'}, srcs_dir),
+                        call({'fn': 'pkg2.tar.bz2'}, srcs_dir)]
             self.assertEqual(mpkg.call_args_list, expected)
             expected = [call(os.path.join(srcs_dir, 'pkg1.tar.bz2'),
                              self.config),
