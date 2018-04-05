@@ -7,7 +7,8 @@ from __future__ import print_function, division, absolute_import
 """
 This is a copy of the conda/install.py script, with the additional
 "fake prefix" modification roughly proposed in
-https://github.com/conda/conda/pull/1222.
+https://github.com/conda/conda/pull/1222 and a collection of functions from
+conda that add support for the installation of noarch python packages.
 
 """
 
@@ -34,19 +35,24 @@ standalone, i.e. not import any other parts of `conda` (only depend on
 the standard library).
 '''
 
-
-import time
-import os
 import json
+import logging
+import os
+from os.path import abspath, basename, dirname, exists, isdir, isfile, islink, \
+    join, lexists, split, splitext
+import re
+import shlex
 import shutil
 import stat
-import sys
+from stat import S_IMODE, S_IXGRP, S_IXOTH, S_IXUSR
 import subprocess
+import sys
 import tarfile
+from textwrap import dedent
+import time
 import traceback
-import logging
-import shlex
-from os.path import abspath, basename, dirname, isdir, isfile, islink, join
+import warnings
+
 
 try:
     from conda.lock import Locked
@@ -399,6 +405,206 @@ def symlink_conda(prefix, root_dir):
     if not os.path.lexists(prefix_deactivate):
         os.symlink(root_deactivate, prefix_deactivate)
 
+# ========================== begin noarch functions =========================
+# Below are a collection of functions that are used when installing noarch
+# packages. The functions have been copied (and in some places modified) from
+# conda at commit sha be8c08c083f4d5e05b06bd2689d2cd0d410c2ffe.
+
+python_entry_point_template = dedent("""
+# -*- coding: utf-8 -*-
+import re
+import sys
+from %(module)s import %(import_name)s
+if __name__ == '__main__':
+    sys.argv[0] = re.sub(r'(-script\.pyw?|\.exe)?$', '', sys.argv[0])
+    sys.exit(%(func)s())
+""").lstrip()
+
+# three capture groups: whole_shebang, executable, options
+SHEBANG_REGEX = (br'^(#!'  # pretty much the whole match string
+                 br'(?:[ ]*)'  # allow spaces between #! and beginning of the executable path
+                 br'(/(?:\\ |[^ \n\r\t])*)'  # the executable is the next text block without an escaped space or non-space whitespace character  # NOQA
+                 br'(.*)'  # the rest of the line can contain option flags
+                 br')$')  # end whole_shebang group
+
+
+def pyc_path(py_path, python_major_minor_version):
+    """
+    Copy of conda/common/path.py:pyc_path at
+    be8c08c083f4d5e05b06bd2689d2cd0d410c2ffe.
+
+    """
+    pyver_string = python_major_minor_version.replace('.', '')
+    if pyver_string.startswith('2'):
+        return py_path + 'c'
+    else:
+        directory, py_file = split(py_path)
+        basename_root, extension = splitext(py_file)
+        pyc_file = "__pycache__/%s.cpython-%s%sc" % (basename_root, pyver_string, extension)
+        return "%s/%s" % (directory, pyc_file) if directory else pyc_file
+
+
+def get_python_noarch_target_path(source_short_path, target_site_packages_short_path):
+    """
+    Modified version of conda/common/path.py:get_python_noarch_target_path at
+    be8c08c083f4d5e05b06bd2689d2cd0d410c2ffe.
+
+    Modifications included:
+        * removed windows specific support
+
+    """
+    if source_short_path.startswith('site-packages/'):
+        sp_dir = target_site_packages_short_path
+        return source_short_path.replace('site-packages', sp_dir, 1)
+    elif source_short_path.startswith('python-scripts/'):
+        bin_dir = 'bin'
+        return source_short_path.replace('python-scripts', bin_dir, 1)
+    else:
+        return source_short_path
+
+
+def compile_pyc(python_exe_full_path, py_full_path, pyc_full_path):
+    """
+    Modified version of conda/gateways/disk/create.py:compile_pyc at
+    be8c08c083f4d5e05b06bd2689d2cd0d410c2ffe.
+
+    Modification included:
+        * changed log.trace -> log.info (log.trace not supported)
+
+    """
+    if os.path.lexists(pyc_full_path):
+        warnings.warn('{} already exists'.format(pyc_full_path))
+    command = [python_exe_full_path, '-Wi', '-m', 'py_compile', py_full_path]
+    subprocess.call(command)
+
+    if not isfile(pyc_full_path):
+        message = """
+                pyc file failed to compile successfully
+                  python_exe_full_path: %()s\n
+                  py_full_path: %()s\n
+                  pyc_full_path: %()s\n
+                """
+        log.info(message, python_exe_full_path, py_full_path, pyc_full_path)
+        return None
+
+    return pyc_full_path
+
+
+def parse_entry_point_def(ep_definition):
+    """
+    Copy of conda/common/path.py:parse_entry_point_def at
+    be8c08c083f4d5e05b06bd2689d2cd0d410c2ffe.
+
+    """
+    cmd_mod, func = ep_definition.rsplit(':', 1)
+    command, module = cmd_mod.rsplit("=", 1)
+    command, module, func = command.strip(), module.strip(), func.strip()
+    return command, module, func
+
+
+def make_executable(path):
+    """
+    Modified version of conda/gateways/disk/permissions.py:make_executable at
+    be8c08c083f4d5e05b06bd2689d2cd0d410c2ffe.
+
+    Modifications included:
+        * changed lstat -> os.lstat
+        * changed chmod -> os.chmod
+        * changed log.trace -> log.info (log.trace not supported)
+
+    """
+    if isfile(path):
+        mode = os.lstat(path).st_mode
+        log.info('chmod +x %s', path)
+        os.chmod(path, S_IMODE(mode) | S_IXUSR | S_IXGRP | S_IXOTH)
+    else:
+        log.error("Cannot make path '%s' executable", path)
+
+
+def replace_long_shebang(data):
+    """
+    Modified version of conda/core/portability.py:replace_long_shebang
+    at be8c08c083f4d5e05b06bd2689d2cd0d410c2ffe.
+
+    Modifications included:
+        * removed mode check for non-binary shebang
+
+    """
+    shebang_match = re.match(SHEBANG_REGEX, data, re.MULTILINE)
+    if shebang_match:
+        whole_shebang, executable, options = shebang_match.groups()
+        if len(whole_shebang) > 127:
+            executable_name = executable.decode('utf-8').split('/')[-1]
+            new_shebang = '#!/usr/bin/env %s%s' % (
+            executable_name, options.decode('utf-8'))
+            data = data.replace(whole_shebang, new_shebang.encode('utf-8'))
+    return data
+
+
+def create_python_entry_point(target_full_path, python_full_path, module, func):
+    """
+    Modified version of conda/gateways/disk/create.py:create_python_entry_point
+    at be8c08c083f4d5e05b06bd2689d2cd0d410c2ffe.
+
+    Modifications included:
+        * Modified the error for the check that the entry point already
+        exists to raise a warning rather than an error
+
+    """
+
+    if os.path.lexists(target_full_path):
+        warnings.warn('Entrypoint {} already exists.'.format(target_full_path))
+
+    import_name = func.split('.')[0]
+    pyscript = python_entry_point_template % {
+        'module': module,
+        'func': func,
+        'import_name': import_name,
+    }
+
+    if python_full_path is not None:
+        shebang = '#!%s\n' % python_full_path
+        if hasattr(shebang, 'encode'):
+            shebang = shebang.encode()
+
+        shebang = replace_long_shebang(shebang)
+
+        if hasattr(shebang, 'decode'):
+            shebang = shebang.decode()
+    else:
+        shebang = None
+
+    with open(target_full_path, str('w')) as fo:
+        if shebang is not None:
+            fo.write(shebang)
+        fo.write(pyscript)
+
+    if shebang is not None:
+        make_executable(target_full_path)
+
+    return target_full_path
+
+
+def get_python_version(prefix):
+    """
+    Returns the version of the python that is already linked in the environment.
+
+    Args:
+        * prefix - path to environment
+
+    """
+    py_ver = None
+    for dist in linked(prefix):
+        match = re.search('python-(\d+.\d+).\d+-\d+', dist)
+        if match:
+            py_ver = match.group(1)
+        else:
+            log.info('Python has not been linked in the environment')
+    return py_ver
+
+# =========================== end noarch functions ==========================
+
+
 # ========================== begin API functions =========================
 
 def try_hard_link(pkgs_dir, prefix, dist):
@@ -516,7 +722,7 @@ def link(pkgs_dir, prefix, dist, linktype=LINK_HARD, index=None, target_prefix=N
         return
 
     source_dir = join(pkgs_dir, dist)
-    if not run_script(dist, 'pre-link', prefix, target_prefix):
+    if not run_script(prefix, dist, 'pre-link', target_prefix):
         sys.exit('Error: pre-link failed: %s' % dist)
 
     info_dir = join(source_dir, 'info')
@@ -524,10 +730,54 @@ def link(pkgs_dir, prefix, dist, linktype=LINK_HARD, index=None, target_prefix=N
     has_prefix_files = read_has_prefix(join(info_dir, 'has_prefix'))
     no_link = read_no_link(info_dir)
 
+    noarch = False
+    # If the distribution is noarch, it will contain a `link.json` file in
+    # the info_dir
+    with open(join(info_dir, 'index.json'), 'r') as fh:
+        index_data = json.loads(fh.read())
+    if 'noarch' in index_data:
+        noarch = index_data['noarch']
+    elif 'noarch_python' in index_data:
+        # `noarch_python` has been deprecated.
+        if index_data['noarch_python'] is True:
+            noarch = 'python'
+
+    if noarch == 'python':
+        if on_win:
+            raise ValueError('Windows is not supported.')
+
+        link_json = join(info_dir, 'link.json')
+        if exists(link_json):
+            with open(link_json, 'r') as fh:
+                link_data = json.loads(fh.read())
+            if 'noarch' in link_data:
+                noarch_json = link_data['noarch']
+
+        target_py_version = get_python_version(prefix)
+        target_python_short_path = join('bin', 'python{}'.format(
+            target_py_version))
+        target_site_packages = join('lib', 'python{}'.format(
+            target_py_version), 'site-packages')
+
+    # A list of the files, including pyc files and entrypoints, that will be
+    # added to the metadata.
+    all_files = []
+
     with Locked(prefix), Locked(pkgs_dir):
         for f in files:
             src = join(source_dir, f)
-            dst = join(prefix, f)
+
+            if noarch == 'python':
+                noarch_f = get_python_noarch_target_path(f,
+                                                         target_site_packages)
+                dst = join(prefix, noarch_f)
+                all_files.append(noarch_f)
+            # Non-noarch packages do not need special handling of the
+            # site-packages
+            else:
+                dst = join(prefix, f)
+                all_files.append(f)
+
             dst_dir = dirname(dst)
             if not isdir(dst_dir):
                 os.makedirs(dst_dir)
@@ -545,6 +795,30 @@ def link(pkgs_dir, prefix, dist, linktype=LINK_HARD, index=None, target_prefix=N
             except OSError as e:
                 log.error('failed to link (src=%r, dst=%r, type=%r, error=%r)' %
                           (src, dst, lt, e))
+
+        # noarch package specific installation steps
+        if noarch == 'python':
+            # Create entrypoints
+            if 'entry_points' in noarch_json:
+                for entry_point in noarch_json['entry_points']:
+
+                    command, module, func = parse_entry_point_def(entry_point)
+                    entry_point_file = create_python_entry_point(
+                        join(prefix, 'bin', command),
+                        join(prefix, target_python_short_path), module, func)
+                    all_files.append(entry_point_file)
+
+            # Compile pyc files
+            for f in all_files:
+                if f.endswith('.py'):
+                    py_path = join(prefix, f)
+                    pyc_filepath = compile_pyc(
+                        join(prefix,
+                        target_python_short_path),
+                        py_path,
+                        pyc_path(py_path, target_py_version))
+                    if pyc_filepath.startswith(prefix):
+                        all_files.append(pyc_filepath[len(prefix):])
 
         if name_dist(dist) == '_cache':
             return
@@ -579,7 +853,7 @@ def link(pkgs_dir, prefix, dist, linktype=LINK_HARD, index=None, target_prefix=N
             meta_dict['files'] = list(yield_lines(alt_files_path))
             os.unlink(alt_files_path)
         except IOError:
-            meta_dict['files'] = files
+            meta_dict['files'] = all_files
         meta_dict['link'] = {'source': source_dir,
                              'type': link_name_map.get(linktype)}
         if 'channel' in meta_dict:

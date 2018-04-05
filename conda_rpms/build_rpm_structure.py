@@ -5,20 +5,16 @@ Turn the gitenv into RPM spec files which can be built at a later stage.
 """
 from __future__ import print_function
 
-import datetime
-from glob import glob
 import os
 import shutil
-import time
 
 import conda.api
 import conda.fetch
 from conda.resolve import Resolve, MatchSpec
 from conda_gitenv import manifest_branch_prefix
 from conda_gitenv.deploy import tags_by_label, tags_by_env
-from conda_gitenv.lock import Locked
 from conda_gitenv.resolve import tempdir, create_tracking_branches
-from git import Repo, Commit
+from git import Repo
 import yaml
 
 import logging
@@ -143,11 +139,29 @@ def create_rpmbuild_for_tag(repo, tag_name, target, config):
     with open(spec_fname, 'r') as fh:
         env_spec = yaml.safe_load(fh).get('env', [])
     create_rpmbuild_for_env(manifest, target, config)
-    pkgs = [pkg for _, pkg in manifest]
+
+    index = conda.fetch.fetch_index(list(set([url for url, _ in manifest])),
+                                    use_cache=False)
+    resolver = Resolve(index)
+
+    # To sort, the distributions must match the format of the keys of the index.
+    # For example, most will look like `http://channel::pkg
+    # However channels on anaconda go by their name rather than their url,
+    # i.e. `conda-forge::pkg`
+    dists = []
+    for url, pkg in manifest:
+        anaconda_url = 'https://conda.anaconda.org/'
+        if url.startswith(anaconda_url):
+            url = url[len(anaconda_url):]
+        dists.append('::'.join([os.path.dirname(url), pkg]))
+    sorted_dists = resolver.dependency_sort(dists)
+    sorted_pkgs = [dist.split('::')[-1] for dist in sorted_dists]
+
     env_name, tag = tag_name.split('-', 2)[1:]
     fname = '{}-env-{}-tag-{}.spec'.format(rpm_prefix, env_name, tag)
     with open(os.path.join(target, 'SPECS', fname), 'w') as fh:
-        fh.write(generate.render_taggedenv(env_name, tag, pkgs, config, env_spec))
+        fh.write(generate.render_taggedenv(env_name, tag, sorted_pkgs, config,
+                                           env_spec))
 
 
 def create_rpmbuild_content(repo, target, config, state):
