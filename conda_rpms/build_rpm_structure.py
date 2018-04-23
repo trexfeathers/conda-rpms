@@ -5,6 +5,7 @@ Turn the gitenv into RPM spec files which can be built at a later stage.
 """
 from __future__ import print_function
 
+import fnmatch
 import os
 import shutil
 
@@ -164,7 +165,18 @@ def create_rpmbuild_for_tag(repo, tag_name, target, config):
                                            env_spec))
 
 
-def create_rpmbuild_content(repo, target, config, state):
+def _env_label_filter(branch_name, label, desired_env_labels):
+    """
+    Tests whether the current branch_name + label combination matches any of the
+    desired environment labels.
+
+    """
+    return any([fnmatch.fnmatch('{}/{}'.format(branch_name, label),
+                           env_label) for env_label in desired_env_labels])
+
+
+def create_rpmbuild_content(repo, target, config, state,
+                            desired_env_labels=['*']):
     rpm_prefix = config['rpm']['prefix']
     for branch in repo.branches:
         # We only want environment branches, not manifest branches.
@@ -203,11 +215,16 @@ def create_rpmbuild_content(repo, target, config, state):
 
             # Keep track of the labels which have tags - its those we want.
             for label, tag in sorted(labelled_tags.items()):
-                create_rpmbuild_for_tag(repo, tag, target, config)
-                fname = '{}-env-{}-label-{}.spec'.format(rpm_prefix, branch.name, label)
-                with open(os.path.join(target, 'SPECS', fname), 'w') as fh:
-                    fh.write(generate.render_env(branch.name, label,
-                                                 config, tag, commit_num))
+                
+                # Only create RPMs for environments that match the given
+                # pattern.
+                if _env_label_filter(branch.name, label, desired_env_labels):
+                    create_rpmbuild_for_tag(repo, tag, target, config)
+                    fname = '{}-env-{}-label-{}.spec'.format(
+                            rpm_prefix, branch.name, label)
+                    with open(os.path.join(target, 'SPECS', fname), 'w') as fh:
+                        fh.write(generate.render_env(branch.name, label,
+                                                     config, tag, commit_num))
 
 
 def create_rpm_installer(target, config, python_spec='python'):
@@ -246,6 +263,9 @@ def configure_parser(parser):
                         help='YAML configuration filename.')
     parser.add_argument('--state', '-s',
                         help='YAML label RPM state filename.')
+    parser.add_argument('--env_labels', nargs='+',  default=['*'], 
+                        help='Pattern to match environment labels to. In the '
+                             'form "{environment}/{label}".',)
     parser.set_defaults(function=handle_args)
     return parser
 
@@ -267,7 +287,8 @@ def handle_args(args):
     with tempdir() as repo_directory:
         repo = Repo.clone_from(args.repo_uri, repo_directory)
         create_tracking_branches(repo)
-        create_rpmbuild_content(repo, args.target, config, state)
+        create_rpmbuild_content(repo, args.target, config, state,
+                                args.env_labels)
         create_rpm_installer(args.target, config)
 
 

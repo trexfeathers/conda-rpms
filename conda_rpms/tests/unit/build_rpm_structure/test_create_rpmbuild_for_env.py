@@ -16,7 +16,7 @@ class Test(tests.CommonTest):
 
     def test_pkg_all_linked(self):
         func = 'conda_rpms.install.linked'
-        with patch(func, return_value=zip(*self.pkgs)[1]):
+        with patch(func, return_value=list(zip(*self.pkgs))[1]):
             with self.temp_dir() as target:
                 create_rpmbuild_for_env(self.pkgs, target, self.config)
         spec_dir = os.path.join(target, 'SPECS')
