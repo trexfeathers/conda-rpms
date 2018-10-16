@@ -45,7 +45,7 @@ export BUILD_PREFIX=${RPM_BUILD_ROOT}${DIST_PREFIX}
 mkdir -p $BUILD_PREFIX $RPM_BUILD_ROOT$INSTALL_PREFIX/.envs $RPM_BUILD_ROOT$INSTALL_PREFIX/.pkgs
 
 # Copy the contents of the conda distribution.
-cp -rf * $BUILD_PREFIX/
+cp -rfp * $BUILD_PREFIX/
 
 # Put the install.py file into the "installer" pkgs directory. 
 cp %{SOURCE1} ${RPM_BUILD_ROOT}$INSTALL_PREFIX/.pkgs/installer/install.py
