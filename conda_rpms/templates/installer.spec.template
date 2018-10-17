@@ -2,7 +2,7 @@
 
 Name:           {{ rpm_prefix }}-installer
 Version:        {{ pkg_info.version }}
-Release:        {{ pkg_info.build|int + 0}}
+Release:        {{ pkg_info.build|int + 1}}
 Summary:        This this the package which owns {{ install_prefix }}, and which provides a barebones python + install.py
 
 License:        BSD
