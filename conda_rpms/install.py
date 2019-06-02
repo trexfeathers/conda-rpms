@@ -44,7 +44,7 @@ import re
 import shlex
 import shutil
 import stat
-from stat import S_IMODE, S_IXGRP, S_IXOTH, S_IXUSR
+from stat import S_IMODE, S_IXGRP, S_IXOTH, S_IRUSR, S_IWUSR, S_IXUSR
 import subprocess
 import sys
 import tarfile
@@ -301,6 +301,10 @@ def create_meta(prefix, dist, info_dir, extra_info):
     meta_dir = join(prefix, 'conda-meta')
     if not isdir(meta_dir):
         os.makedirs(meta_dir)
+        # Lock down the conda-meta directory, which may contain
+        # API credentials.
+        mode = S_IRUSR | S_IWUSR | S_IXUSR
+        os.chmod(meta_dir, mode)
     with open(join(meta_dir, dist + '.json'), 'w') as fo:
         json.dump(meta, fo, indent=2, sort_keys=True)
 
