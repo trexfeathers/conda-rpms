@@ -5,7 +5,7 @@ Turn the gitenv into RPM spec files which can be built at a later stage.
 """
 from __future__ import print_function
 
-import fnmatch
+from fnmatch import fnmatch
 import os
 import shutil
 
@@ -13,7 +13,7 @@ import conda.api
 import conda.fetch
 from conda.resolve import Resolve, MatchSpec
 from conda_gitenv import manifest_branch_prefix
-from conda_gitenv.deploy import tags_by_label, tags_by_env
+from conda_gitenv.deploy import tags_by_label
 from conda_gitenv.resolve import tempdir, create_tracking_branches
 from git import Repo
 import yaml
@@ -78,6 +78,7 @@ def create_rpmbuild_for_env(pkgs, target, config):
     rpm_prefix = config['rpm']['prefix']
     pkg_cache = os.path.join(target, 'SOURCES')
     pkg_names = set(pkg for _, pkg in pkgs)
+
     if os.path.exists(target):
         # The environment we want to deploy already exists. We should
         # just double check that there aren't already packages in there which
@@ -98,6 +99,7 @@ def create_rpmbuild_for_env(pkgs, target, config):
     spec_dir = os.path.join(target, 'SPECS')
     if not os.path.exists(spec_dir):
         os.makedirs(spec_dir)
+
     for source, pkg in pkgs:
         index = conda.fetch.fetch_index([source], use_cache=False)
         pkg_index = {pkg_info['fn']: pkg_info for pkg_info in index.values()}
@@ -106,9 +108,8 @@ def create_rpmbuild_for_env(pkgs, target, config):
         if pkg_info is None:
             raise ValueError('Distribution {} is no longer available '
                              'in the channel {}.'.format(tar_name, source))
-        dist_name = pkg 
-        if not conda_install.is_fetched(pkg_cache, dist_name):
-            print('Fetching {}'.format(dist_name))
+        if not conda_install.is_fetched(pkg_cache, pkg):
+            print('Fetching {}'.format(pkg))
             conda.fetch.fetch_pkg(pkg_info, pkg_cache)
         spec_path = os.path.join(spec_dir, '{}-pkg-{}.spec'.format(rpm_prefix,
                                                                    pkg))
@@ -119,7 +120,15 @@ def create_rpmbuild_for_env(pkgs, target, config):
                 fh.write(spec)
 
 
-def create_rpmbuild_for_tag(repo, tag_name, target, config):
+def create_rpmbuild_for_tag(repo, tag_name, target, config,
+                            api_user=None, api_key=None):
+    try:
+        # Python3...
+        from urllib.parse import urlparse
+    except ImportError:
+        # Python2...
+        from urlparse import urlparse
+
     rpm_prefix = config['rpm']['prefix']
     print("CREATE FOR {}".format(tag_name))
     tag = repo.tags[tag_name]
@@ -129,23 +138,26 @@ def create_rpmbuild_for_tag(repo, tag_name, target, config):
 
     manifest_fname = os.path.join(repo.working_dir, 'env.manifest')
     if not os.path.exists(manifest_fname):
-        raise ValueError("The tag '{}' doesn't have a manifested "
-                         "environment.".format(tag_name))
+        emsg = "The tag '{}' doesn't have a manifested environment."
+        raise ValueError(emsg.format(tag_name))
     with open(manifest_fname, 'r') as fh:
         manifest = sorted(line.strip().split('\t') for line in fh)
+        if api_user and api_key:
+            # Inject the API user and key into the channel URLs...
+            for i, (url, _) in enumerate(manifest):
+                parts = urlparse(url)
+                api_url = '{}://{}:{}@{}{}'.format(parts.scheme, api_user,
+                                                   api_key, parts.netloc,
+                                                   parts.path)
+                manifest[i][0] = api_url
 
-    spec_fname = os.path.join(repo.working_dir, 'env.spec')
-    if not os.path.exists(spec_fname):
-        raise ValueError("The tag '{}' doesn't have an environment specification.".format(tag_name))
-    with open(spec_fname, 'r') as fh:
-        env_spec = yaml.safe_load(fh).get('env', [])
     create_rpmbuild_for_env(manifest, target, config)
 
     index = conda.fetch.fetch_index(list(set([url for url, _ in manifest])),
                                     use_cache=False)
     resolver = Resolve(index)
 
-    # To sort, the distributions must match the format of the keys of the index.
+    # To sort, the distributions must match the format of the keys of the index
     # For example, most will look like `http://channel::pkg
     # However channels on anaconda go by their name rather than their url,
     # i.e. `conda-forge::pkg`
@@ -158,6 +170,13 @@ def create_rpmbuild_for_tag(repo, tag_name, target, config):
     sorted_dists = resolver.dependency_sort(dists)
     sorted_pkgs = [dist.split('::')[-1] for dist in sorted_dists]
 
+    spec_fname = os.path.join(repo.working_dir, 'env.spec')
+    if not os.path.exists(spec_fname):
+        emsg = "The tag '{}' doesn't have an environment specification."
+        raise ValueError(emsg.format(tag_name))
+    with open(spec_fname, 'r') as fh:
+        env_spec = yaml.safe_load(fh).get('env', [])
+
     env_name, tag = tag_name.split('-', 2)[1:]
     fname = '{}-env-{}-tag-{}.spec'.format(rpm_prefix, env_name, tag)
     with open(os.path.join(target, 'SPECS', fname), 'w') as fh:
@@ -165,19 +184,23 @@ def create_rpmbuild_for_tag(repo, tag_name, target, config):
                                            env_spec))
 
 
-def _env_label_filter(branch_name, label, desired_env_labels):
+def _env_label_filter(branch_name, label, env_labels):
     """
-    Tests whether the current branch_name + label combination matches any of the
-    desired environment labels.
+    Tests whether the current branch_name + label combination matches any of
+    the desired environment labels.
 
     """
-    return any([fnmatch.fnmatch('{}/{}'.format(branch_name, label),
-                           env_label) for env_label in desired_env_labels])
+    item = '{}/{}'.format(branch_name, label)
+    return any([fnmatch(item, env_label) for env_label in env_labels])
 
 
-def create_rpmbuild_content(repo, target, config, state,
-                            desired_env_labels=['*']):
+def create_rpmbuild_content(repo, target, config, state, env_labels=None,
+                            api_user=None, api_key=None):
+    if env_labels is None:
+        env_labels = ['*']
+
     rpm_prefix = config['rpm']['prefix']
+
     for branch in repo.branches:
         # We only want environment branches, not manifest branches.
         if not branch.name.startswith(manifest_branch_prefix):
@@ -215,11 +238,12 @@ def create_rpmbuild_content(repo, target, config, state,
 
             # Keep track of the labels which have tags - its those we want.
             for label, tag in sorted(labelled_tags.items()):
-                
                 # Only create RPMs for environments that match the given
                 # pattern.
-                if _env_label_filter(branch.name, label, desired_env_labels):
-                    create_rpmbuild_for_tag(repo, tag, target, config)
+                if _env_label_filter(branch.name, label, env_labels):
+                    create_rpmbuild_for_tag(repo, tag, target, config,
+                                            api_user=api_user,
+                                            api_key=api_key)
                     fname = '{}-env-{}-label-{}.spec'.format(
                             rpm_prefix, branch.name, label)
                     with open(os.path.join(target, 'SPECS', fname), 'w') as fh:
@@ -265,7 +289,11 @@ def configure_parser(parser):
                         help='YAML label RPM state filename.')
     parser.add_argument('--env_labels', nargs='+',  default=['*'], 
                         help='Pattern to match environment labels to. In the '
-                             'form "{environment}/{label}".',)
+                             'form "{environment}/{label}".')
+    parser.add_argument('--api_user', '-u', action='store',
+                        help='the API user')
+    parser.add_argument('--api_key', '-k', action='store',
+                        help='the API key')
     parser.set_defaults(function=handle_args)
     return parser
 
@@ -288,14 +316,17 @@ def handle_args(args):
         repo = Repo.clone_from(args.repo_uri, repo_directory)
         create_tracking_branches(repo)
         create_rpmbuild_content(repo, args.target, config, state,
-                                args.env_labels)
+                                env_labels=args.env_labels,
+                                api_user=args.api_user,
+                                api_key=args.api_key)
         create_rpm_installer(args.target, config)
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Deploy the tracked '
-                                                 'environments.')
+
+    description = 'Deploy the tracked environments.'
+    parser = argparse.ArgumentParser(description=description)
     configure_parser(parser)
     args = parser.parse_args()
     return args.function(args)
