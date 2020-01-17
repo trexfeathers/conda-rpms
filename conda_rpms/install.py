@@ -10,6 +10,9 @@ This is a copy of the conda/install.py script, with the additional
 https://github.com/conda/conda/pull/1222 and a collection of functions from
 conda that add support for the installation of noarch python packages.
 
+In addition, modified the create_meta function to lock-down the "conda-meta"
+directory permissions to be 0o700. See the create_meta function for details.
+
 """
 
 
@@ -301,10 +304,12 @@ def create_meta(prefix, dist, info_dir, extra_info):
     meta_dir = join(prefix, 'conda-meta')
     if not isdir(meta_dir):
         os.makedirs(meta_dir)
+        # XXX: local modification - start
         # Lock down the conda-meta directory, which may contain
         # API credentials.
         mode = S_IRUSR | S_IWUSR | S_IXUSR
         os.chmod(meta_dir, mode)
+        # XXX: local modification - end
     with open(join(meta_dir, dist + '.json'), 'w') as fo:
         json.dump(meta, fo, indent=2, sort_keys=True)
 
