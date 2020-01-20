@@ -10,8 +10,8 @@ This is a copy of the conda/install.py script, with the additional
 https://github.com/conda/conda/pull/1222 and a collection of functions from
 conda that add support for the installation of noarch python packages.
 
-In addition, modified the create_meta function to lock-down the "conda-meta"
-directory permissions to be 0o700. See the create_meta function for details.
+In addition, modified the get_python_version function to correctly determine
+the linked version of python available in the distribution.
 
 """
 
@@ -47,7 +47,7 @@ import re
 import shlex
 import shutil
 import stat
-from stat import S_IMODE, S_IXGRP, S_IXOTH, S_IRUSR, S_IWUSR, S_IXUSR
+from stat import S_IMODE, S_IXGRP, S_IXOTH, S_IXUSR
 import subprocess
 import sys
 import tarfile
@@ -304,12 +304,6 @@ def create_meta(prefix, dist, info_dir, extra_info):
     meta_dir = join(prefix, 'conda-meta')
     if not isdir(meta_dir):
         os.makedirs(meta_dir)
-        # XXX: local modification - start
-        # Lock down the conda-meta directory, which may contain
-        # API credentials.
-        mode = S_IRUSR | S_IWUSR | S_IXUSR
-        os.chmod(meta_dir, mode)
-        # XXX: local modification - end
     with open(join(meta_dir, dist + '.json'), 'w') as fo:
         json.dump(meta, fo, indent=2, sort_keys=True)
 
@@ -604,11 +598,12 @@ def get_python_version(prefix):
     """
     py_ver = None
     for dist in linked(prefix):
-        match = re.search('python-(\d+.\d+).\d+-\d+', dist)
+        match = re.search('python-(\d+.\d+)', dist)
         if match:
             py_ver = match.group(1)
-        else:
-            log.info('Python has not been linked in the environment')
+            break
+    if py_ver is None:
+        log.info('Python has not been linked in the environment')
     return py_ver
 
 # =========================== end noarch functions ==========================
