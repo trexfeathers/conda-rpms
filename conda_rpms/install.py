@@ -598,7 +598,7 @@ def get_python_version(prefix):
     """
     py_ver = None
     for dist in linked(prefix):
-        match = re.search('python-(\d+.\d+)', dist)
+        match = re.search('^python-(\d+.\d+)', dist)
         if match:
             py_ver = match.group(1)
             break
